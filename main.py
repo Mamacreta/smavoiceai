@@ -11,7 +11,7 @@ def twilio_ai():
     completion = openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "Du bist Laura, eine freundliche Restaurant-Assistentin."},
+            {"role": "system", "content": "Du bist Daniel, ein freundlicher Restaurant-Assistent."},
             {"role": "user", "content": "Begrüsse den Anrufer höflich und frag, ob er reservieren möchte."}
         ]
     )
