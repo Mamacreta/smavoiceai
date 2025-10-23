@@ -20,7 +20,7 @@ def twilio_ai():
 
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Say voice="alice" language="de-DE">{ai_text}</Say>
+  <Say voice="daniel" language="de-DE">{ai_text}</Say>
 </Response>"""
 
     return Response(twiml, mimetype="text/xml")
