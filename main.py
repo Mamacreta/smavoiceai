@@ -94,9 +94,10 @@ def twilio_ai():
 
     # --- Begrüßung ---
     generate_voice(greeting, voice_id)
+    time.sleep(1.5)
     greeting_xml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Play>/tmp/response.mp3</Play>
+    <Play>https://smavoiceai.onrender.com/tmp/response.mp3</Play>
     <Gather input="speech" action="/reply?lang={}" method="POST" timeout="10"/>
 </Response>""".format(lang)
     return Response(greeting_xml, mimetype="text/xml")
@@ -127,10 +128,10 @@ def reply():
     reply_text = completion.choices[0].message.content
 
     generate_voice(reply_text, voice_id)
-    time.sleep(1.0)
+    time.sleep(1.5)
     xml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Play>/tmp/response.mp3</Play>
+   <Play>https://smavoiceai.onrender.com/tmp/response.mp3</Play>
     <Gather input="speech" action="/reply?lang={}" method="POST" timeout="10"/>
 </Response>""".format(lang)
     return Response(xml, mimetype="text/xml")
