@@ -77,6 +77,12 @@ def twilio_ai():
         voice_id = VOICE_ID_EN
 
     audio_path = generate_voice(text, voice_id)
+    response = f"""<?xml version="1.0" encoding="UTF-8"?>
+    <Response>
+        <Play>https://smavoiceai.onrender.com/{audio_path}</Play>
+    </Response>"""
+    return response
+
 
     response = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
