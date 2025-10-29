@@ -9,11 +9,10 @@ app = Flask(__name__)
 # === ENVIRONMENT KEYS ===
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
-
 VOICE_ID_DE = os.environ.get("VOICE_ID_DE")
 VOICE_ID_EN = os.environ.get("VOICE_ID_EN")
 
-# === FIX FOR AUDIO HEADERS ===
+# === FIX: set correct headers for audio ===
 @app.after_request
 def add_header(response):
     if response.mimetype == "audio/mpeg":
@@ -21,7 +20,7 @@ def add_header(response):
     return response
 
 
-# === VOICE GENERATION FUNCTION ===
+# === GENERATE VOICE ===
 def generate_voice(text, voice_id):
     """Erstellt Sprachdatei mit ElevenLabs und speichert sie in /static"""
     os.makedirs("static", exist_ok=True)
@@ -36,10 +35,18 @@ def generate_voice(text, voice_id):
         "model_id": "eleven_multilingual_v2",
         "voice_settings": {"stability": 0.55, "similarity_boost": 0.85},
     }
+
     r = requests.post(url, headers=headers, json=payload)
     path = os.path.join("static", "response.mp3")
     with open(path, "wb") as f:
         f.write(r.content)
+
+    # Warte bis Datei wirklich fertig ist (damit Twilio sie finden kann)
+    for _ in range(10):  # bis zu 10 Sekunden prüfen
+        if os.path.exists(path) and os.path.getsize(path) > 1000:
+            break
+        time.sleep(1)
+
     return path
 
 
@@ -81,7 +88,7 @@ def twilio_ai():
 
     # === Audio generieren ===
     path = generate_voice(greeting, voice_id)
-    time.sleep(3)
+    time.sleep(3)  # kleine Pause
 
     audio_url = f"{request.url_root}static/response.mp3".replace("http://", "https://")
     response = f"""<?xml version="1.0" encoding="UTF-8"?>
