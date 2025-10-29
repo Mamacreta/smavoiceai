@@ -1,30 +1,20 @@
-from flask import Flask, request, send_file
-import requests
+from flask import Flask, request, Response
+import openai
 import os
+import requests
+import time
 
 app = Flask(__name__)
 
-# === API Keys ===
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 
-# === Voice IDs ===
-VOICE_ID_DE = os.getenv("VOICE_ID_DE")
-VOICE_ID_EN = os.getenv("VOICE_ID_EN")
+VOICE_ID_DE = os.environ.get("VOICE_ID_DE")
+VOICE_ID_EN = os.environ.get("VOICE_ID_EN")
 
-# === Öffnungszeiten ===
-OPENING_HOURS_DE = (
-    "Das Restaurant Viadukt ist von Montag bis Freitag von 8 Uhr morgens bis Mitternacht geöffnet, "
-    "am Samstag von 10 Uhr bis Mitternacht und am Sonntag von 9 Uhr bis Mitternacht."
-)
-OPENING_HOURS_EN = (
-    "Restaurant Viadukt is open Monday to Friday from 8 AM until midnight, "
-    "on Saturday from 10 AM until midnight, and on Sunday from 9 AM until midnight."
-)
-
-# === ElevenLabs Sprachgenerierung ===
 def generate_voice(text, voice_id):
-    """Erstellt Sprachausgabe mit ElevenLabs und speichert sie in /static"""
+    """Erstellt Sprachdatei mit ElevenLabs und speichert sie in /static"""
+    os.makedirs("static", exist_ok=True)
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     headers = {
         "Accept": "audio/mpeg",
@@ -36,70 +26,63 @@ def generate_voice(text, voice_id):
         "model_id": "eleven_multilingual_v2",
         "voice_settings": {"stability": 0.55, "similarity_boost": 0.85},
     }
-
     r = requests.post(url, headers=headers, json=payload)
-
-    # Stelle sicher, dass der static-Ordner existiert
-    os.makedirs("static", exist_ok=True)
     path = os.path.join("static", "response.mp3")
-
-    # Speichere Audiodatei
     with open(path, "wb") as f:
         f.write(r.content)
-
     return path
 
 
 @app.route("/twilio-ai", methods=["POST"])
 def twilio_ai():
     digits = request.form.get("Digits")
-    speech = request.form.get("SpeechResult", "").strip()
+    speech = request.form.get("SpeechResult")
 
-    # === Menü ===
+    # Falls kein Sprach-Input kommt, wird speech leer gesetzt
+    if not speech:
+        speech = ""
+    else:
+        speech = speech.strip()
+
+    # Menü-Logik (Sprachauswahl)
     if not digits and not speech:
         menu = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Gather input="dtmf speech" numDigits="1" timeout="10" action="/twilio-ai" method="POST">
-        <Say language="de-DE">Willkommen beim Restaurant Viadukt. Für Deutsch, drücken Sie 1. Für Englisch, drücken Sie 2.</Say>
+    <Gather input="dtmf" numDigits="1" timeout="10" action="/twilio-ai">
+        <Say language="de-DE">Willkommen. Für Deutsch drücken Sie 1.</Say>
         <Pause length="1"/>
-        <Say language="en-US">Welcome to Restaurant Viadukt. For English, press 2. For German, press 1.</Say>
+        <Say language="en-US">For English, press 2.</Say>
     </Gather>
-    <Say>Keine Eingabe erhalten. Auf Wiedersehen.</Say>
+    <Say>Kein Input erkannt. Auf Wiedersehen!</Say>
 </Response>"""
-        return menu
+        return Response(menu, mimetype="text/xml")
 
-    # === Sprache auswählen ===
-    if digits == "1" or "de" in speech.lower():
-        text = OPENING_HOURS_DE
+    # Sprachauswahl
+    if digits == "1":
+        greeting = "Willkommen bei SMA Voice AI. Wie kann ich Ihnen helfen?"
         voice_id = VOICE_ID_DE
-    else:
-        text = OPENING_HOURS_EN
+    elif digits == "2":
+        greeting = "Welcome to SMA Voice AI. How can I help you?"
         voice_id = VOICE_ID_EN
+    else:
+        greeting = "Ungültige Eingabe. Goodbye!"
+        voice_id = VOICE_ID_DE
 
-    audio_path = generate_voice(text, voice_id)
-    response = f"""<?xml version="1.0" encoding="UTF-8"?>
-    <Response>
-        <Play>https://smavoiceai.onrender.com/{audio_path}</Play>
-    </Response>"""
-    return response
-
+    # Generiere Audioantwort
+    path = generate_voice(greeting, voice_id)
+    time.sleep(3)  # kleine Pause, damit Datei bereit ist
 
     response = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Play>{request.url_root}{audio_path}</Play>
+    <Play>{request.url_root}static/response.mp3</Play>
 </Response>"""
-    return response
-
-
-@app.route("/static/<path:filename>")
-def static_files(filename):
-    """Stellt statische Dateien wie Audiodateien bereit"""
-    return send_file(os.path.join("static", filename))
+    return Response(response, mimetype="text/xml")
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
+
+
 
    
 
