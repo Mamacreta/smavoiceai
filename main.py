@@ -39,6 +39,7 @@ def generate_voice(text, voice_id):
         "voice_settings": {"stability": 0.55, "similarity_boost": 0.85},
     }
     r = requests.post(url, headers=headers, json=payload)
+    os.makedirs("static", exist_ok=True)
     path = os.path.join("static", "response.mp3")
     with open(path, "wb") as f:
         f.write(r.content)
