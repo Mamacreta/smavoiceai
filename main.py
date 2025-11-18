@@ -18,13 +18,13 @@ app = Flask(__name__, static_folder="static")
 # Config (ENV Variablen)
 # =====================================
 ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY", "")
-VOICE_ID_DE    = os.getenv("VOICE_ID_DE", "")  # z.B. Sarah-Stimme
-VOICE_ID_EN    = os.getenv("VOICE_ID_EN", "")  # optional, sonst leer lassen
+VOICE_ID_DE    = os.getenv("VOICE_ID_DE", "")  # z.B. Sarah
+VOICE_ID_EN    = os.getenv("VOICE_ID_EN", "")  # optional
 SHEET_ID       = os.getenv("SHEET_ID", "")
 CREDS_JSON     = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
 PORT           = int(os.getenv("PORT", "10000"))
 
-# Simple in-memory call state (für Prototyp okay)
+# In-Memory State (Prototyp)
 SESSIONS = {}  # { CallSid: {"lang": "de"/"en", "step": int, "data": {...}} }
 
 # =====================================
@@ -35,10 +35,10 @@ sh = None
 ws = None
 
 def init_sheets():
-    """Initialisiert Google Sheets Verbindung und Worksheet 'Reservations'."""
+    """Google Sheets verbinden und Worksheet 'Reservations' sicherstellen."""
     global gc, sh, ws
     if not (CREDS_JSON and SHEET_ID):
-        print("⚠️  GOOGLE_CREDENTIALS_JSON oder SHEET_ID nicht gesetzt – Sheets disabled.")
+        print("⚠️ GOOGLE_CREDENTIALS_JSON oder SHEET_ID fehlt – Sheets aus.")
         return
     try:
         info = json.loads(CREDS_JSON)
@@ -61,34 +61,33 @@ def init_sheets():
             ])
             print("✅ Worksheet 'Reservations' erstellt.")
     except Exception as e:
-        print("❌ Fehler bei init_sheets:", e)
+        print("❌ init_sheets Fehler:", e)
 
 def ensure_sheets():
-    """Stellt sicher, dass ws initialisiert ist, bevor wir schreiben."""
     global ws
     if ws is None:
         init_sheets()
 
 def save_row(lang, name, party, rdate, rtime, allergies, phone):
-    """Speichert eine Reservation in Google Sheets."""
+    """Eintrag in Google Sheets speichern."""
     try:
         ensure_sheets()
         if ws is None:
-            print("⚠️ ws ist None – Reservation wird nicht in Sheets geschrieben.")
+            print("⚠️ ws ist None – kein Sheets-Write.")
             return
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         ws.append_row([ts, lang, name, party, rdate, rtime, allergies, phone])
-        print("✅ Reservation in Sheets gespeichert.")
+        print("✅ Reservation gespeichert.")
     except Exception as e:
         print("❌ Sheets save error:", e)
 
 # =====================================
-# ElevenLabs TTS (für Bestätigung)
+# ElevenLabs TTS (nur für Bestätigung)
 # =====================================
 def eleven_tts(text, voice_id, out_path):
-    """Rendert Text zu MP3 via ElevenLabs und speichert in out_path."""
+    """Text zu MP3 rendern via ElevenLabs."""
     if not ELEVEN_API_KEY or not voice_id:
-        print("⚠️ ELEVEN_API_KEY oder VOICE_ID fehlt – TTS wird übersprungen.")
+        print("⚠️ ELEVEN_API_KEY oder VOICE_ID fehlt – TTS skip.")
         return False
 
     try:
@@ -111,7 +110,7 @@ def eleven_tts(text, voice_id, out_path):
         if r.status_code == 200:
             with open(out_path, "wb") as f:
                 f.write(r.content)
-            print("✅ ElevenLabs TTS erfolgreich:", out_path)
+            print("✅ ElevenLabs TTS ok:", out_path)
             return True
 
         print("❌ ElevenLabs error:", r.status_code, r.text)
@@ -166,7 +165,9 @@ def farewell(lang):
 # =====================================
 @app.route("/static/<path:filename>")
 def static_files(filename):
-    return send_from_directory(app.static_folder, filename)
+    # Linter-sicher
+    static_dir = app.static_folder or "static"
+    return send_from_directory(static_dir, filename)
 
 @app.route("/health")
 def health():
@@ -178,8 +179,8 @@ def health():
 @app.route("/twilio-ai", methods=["POST"])
 def twilio_ai():
     call_sid = request.form.get("CallSid", "NA")
-    digits = request.form.get("Digits")
-    speech = (request.form.get("SpeechResult") or "").strip()
+    digits   = request.form.get("Digits")
+    speech   = (request.form.get("SpeechResult") or "").strip()
 
     print("---- /twilio-ai ----")
     print("CallSid:", call_sid)
@@ -206,20 +207,17 @@ def twilio_ai():
 
     resp = VoiceResponse()
 
-    # =================================
-    # 1) Sprachwahl
-    # =================================
+    # =============== 1) Sprachwahl ===============
     if not sess["lang"]:
-        # noch keine Sprache gesetzt
         if not digits:
-            # Erstes Mal oder kein Input → Menü
+            # Menü
             g = Gather(
                 input="dtmf speech",
                 num_digits=1,
                 timeout=5,
                 action=url_for("twilio_ai", _external=True),
                 method="POST",
-                language="de-DE"  # Sprache für STT, hier egal, wir nutzen DTMF
+                language="de-DE"
             )
             g.say(
                 "Willkommen beim Restaurant Viadukt Zürich. Für Deutsch drücken Sie die 1.",
@@ -229,11 +227,9 @@ def twilio_ai():
             g.say("For English, press 2.", language="en-US")
             resp.append(g)
 
-            # falls NICHTS kommt nach dem Gather:
             resp.say("Kein Input erkannt. Auf Wiedersehen.", language="de-DE")
             return str(resp)
 
-        # Digit wurde übergeben
         if digits == "1":
             sess["lang"] = "de"
         elif digits == "2":
@@ -244,7 +240,6 @@ def twilio_ai():
 
         lang_code = "de-DE" if sess["lang"] == "de" else "en-US"
 
-        # Begrüßung + erste Frage
         resp.say(greet(sess["lang"]), language=lang_code)
         sess["step"] = 0
 
@@ -259,16 +254,13 @@ def twilio_ai():
         resp.append(g)
         return str(resp)
 
-    # =================================
-    # 2) Antworten einsammeln
-    # =================================
+    # ========== 2) Antworten einsammeln ==========
     if sess["step"] >= 0:
         lang_code = "de-DE" if sess["lang"] == "de" else "en-US"
         keys = ["name", "party", "date", "time", "allergies", "phone"]
 
-        # sind wir noch mitten in den Fragen?
         if sess["step"] < len(keys):
-            # Wenn nix erkannt → gleiche Frage wiederholen
+            # nix verstanden → gleiche Frage wiederholen
             if not speech:
                 g = Gather(
                     input="speech",
@@ -292,15 +284,12 @@ def twilio_ai():
                 resp.append(g)
                 return str(resp)
 
-            # Etwas wurde erkannt → speichern
             key = keys[sess["step"]]
             sess["data"][key] = speech
             print(f"✅ Gespeichert: {key} = {speech}")
-
-            # nächste Frage
             sess["step"] += 1
 
-        # Haben wir noch Fragen offen?
+        # noch Fragen offen?
         if sess["step"] < len(keys):
             g = Gather(
                 input="speech",
@@ -313,9 +302,7 @@ def twilio_ai():
             resp.append(g)
             return str(resp)
 
-        # =================================
-        # 3) Fertig gesammelt → speichern + bestätigen
-        # =================================
+        # ========== 3) Fertig → Sheets + Bestätigung ==========
         d = sess["data"]
         save_row(
             sess["lang"],
@@ -329,7 +316,6 @@ def twilio_ai():
 
         resp.say(thanks_line(sess["lang"]), language=lang_code)
 
-        # Bestätigungstext bauen
         if sess["lang"] == "de":
             conf = (
                 f"Reservierung für {d['name']}, {d['party']} Personen, am {d['date']} um {d['time']}. "
@@ -346,22 +332,20 @@ def twilio_ai():
                 f"We can reach you at {d['phone']}. "
                 f"{open_hours('en')} {farewell('en')}"
             )
-            voice_id = VOICE_ID_EN or VOICE_ID_DE  # fallback
+            voice_id = VOICE_ID_EN or VOICE_ID_DE
             out = "static/confirm_en.mp3"
 
-        # TTS im Hintergrund rendern
         def render_and_log():
             ok = eleven_tts(conf, voice_id, out)
             print("TTS ready:", ok, "->", out)
 
         threading.Thread(target=render_and_log, daemon=True).start()
-        time.sleep(1)  # kleiner Buffer
+        time.sleep(1)
 
         file_url = f"https://{request.host}/{out}"
         print("▶️ Spiele Bestätigung:", file_url)
         resp.play(file_url)
 
-        # Session cleanup
         try:
             del SESSIONS[call_sid]
         except Exception as e:
@@ -374,13 +358,14 @@ def twilio_ai():
     return str(resp)
 
 # =====================================
-# Main (lokal)
+# Main (lokal / Replit)
 # =====================================
 if __name__ == "__main__":
     os.makedirs("static", exist_ok=True)
     init_sheets()
     print(f"📞 SMA Voice AI läuft auf Port {PORT}")
     app.run(host="0.0.0.0", port=PORT)
+
 
 
 
