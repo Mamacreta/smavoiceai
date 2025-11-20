@@ -25,7 +25,7 @@ PORT = int(os.getenv("PORT", "10000"))
 SHEET_ID = os.getenv("SHEET_ID", "")
 CREDS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
 
-SESSIONS = {}  # { CallSid: {"lang": "de"/"en", "step": int, "data": {...}} }
+SESSIONS = {}  # { CallSid: {"step": int, "started": bool, "data": {...}} }
 
 gc = None
 ws = None
@@ -39,6 +39,7 @@ def init_sheets():
     if not (CREDS_JSON and SHEET_ID):
         print("⚠️  GOOGLE_CREDENTIALS_JSON oder SHEET_ID fehlt.")
         return
+
     try:
         info = json.loads(CREDS_JSON)
         scopes = [
@@ -48,50 +49,79 @@ def init_sheets():
         creds = Credentials.from_service_account_info(info, scopes=scopes)
         gc = gspread.authorize(creds)
         sh = gc.open_by_key(SHEET_ID)
+
         try:
-            ws = sh.worksheet("Reservations")
-            print("✅ Worksheet 'Reservations' gefunden.")
+            ws = sh.worksheet("Appointments")
+            print("✅ Worksheet 'Appointments' gefunden.")
         except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet(title="Reservations", rows=1000, cols=10)
+            ws = sh.add_worksheet(title="Appointments", rows=1000, cols=10)
             ws.append_row(
-                ["Timestamp", "Lang", "Name", "PartySize", "Date", "Time", "Phone"]
+                [
+                    "Timestamp",
+                    "Status",      # bestehend / neu
+                    "Name",
+                    "Geburtsdatum",
+                    "Anliegen",
+                    "Wunschdatum",
+                    "Wunschzeit",
+                    "Telefon",
+                ]
             )
-            print("✅ Worksheet 'Reservations' erstellt.")
+            print("✅ Worksheet 'Appointments' erstellt.")
     except Exception as e:
         print("❌ init_sheets Fehler:", e)
 
 
-def save_row(lang, name, party, rdate, rtime, phone):
+def save_row(data: dict):
     try:
         if ws is None:
             print("⚠️  ws ist None – nichts gespeichert.")
             return
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
-        ws.append_row([ts, lang, name, party, rdate, rtime, phone])
-        print("✅ Reservation gespeichert.")
+        ws.append_row(
+            [
+                ts,
+                data.get("status", ""),
+                data.get("name", ""),
+                data.get("dob", ""),
+                data.get("reason", ""),
+                data.get("date", ""),
+                data.get("time", ""),
+                data.get("phone", ""),
+            ]
+        )
+        print("✅ Termin gespeichert.")
     except Exception as e:
         print("❌ Sheets save error:", e)
 
 
 # =========================
-# Helper Fragen
+# Helper
 # =========================
-def next_question(lang, step):
-    de = [
-        "Wie lautet Ihr Name?",
-        "Für wie viele Personen?",
-        "An welchem Datum?",
-        "Um welche Uhrzeit?",
-        "Welche Telefonnummer darf ich notieren?",
+def next_question_text(step: int) -> str:
+    texts = [
+        "Sind Sie bereits Patientin oder Patient bei uns? Bitte sagen Sie: ja, nein oder unsicher.",
+        "Wie lautet Ihr Vor- und Nachname?",
+        "Wie ist Ihr Geburtsdatum? Bitte nennen Sie Tag, Monat und Jahr.",
+        "Worum geht es bei Ihrem Anliegen? Zum Beispiel Kontrolle, akute Beschwerden, Rezept oder etwas anderes.",
+        "Für welches Datum wünschen Sie einen Termin? Sie können auch sagen: so bald wie möglich.",
+        "Zu welcher Uhrzeit passt es Ihnen am besten? Morgens, nachmittags oder eine genaue Uhrzeit.",
+        "Unter welcher Telefonnummer können wir Sie zurückrufen? Bitte sprechen Sie die Nummer deutlich aus.",
     ]
-    en = [
-        "What's your name?",
-        "For how many people?",
-        "On which date?",
-        "At what time?",
-        "Which phone number can I note?",
+    return texts[step]
+
+
+def question_audio_filename(step: int) -> str:
+    files = [
+        "de_q0_status.mp3",
+        "de_q1_name.mp3",
+        "de_q2_dob.mp3",
+        "de_q3_reason.mp3",
+        "de_q4_date.mp3",
+        "de_q5_time.mp3",
+        "de_q6_phone.mp3",
     ]
-    return de[step] if lang == "de" else en[step]
+    return files[step]
 
 
 # =========================
@@ -113,117 +143,114 @@ def health():
 @app.route("/twilio-ai", methods=["POST"])
 def twilio_ai():
     call_sid = request.form.get("CallSid", "NA")
-    digits = request.form.get("Digits")
     speech = (request.form.get("SpeechResult") or "").strip()
 
+    print("---- /twilio-ai ----")
+    print("CallSid:", call_sid)
+    print("SpeechResult:", speech)
+
+    # Session holen / erstellen
     sess = SESSIONS.get(call_sid)
     if not sess:
         sess = {
-            "lang": None,
-            "step": -1,
-            "data": {"name": "", "party": "", "date": "", "time": "", "phone": ""},
+            "started": False,
+            "step": 0,
+            "data": {
+                "status": "",
+                "name": "",
+                "dob": "",
+                "reason": "",
+                "date": "",
+                "time": "",
+                "phone": "",
+            },
         }
         SESSIONS[call_sid] = sess
 
     resp = VoiceResponse()
 
     # =========================
-    # 1) Sprachwahl
+    # 1) Erste Antwort nach Begrüßung
     # =========================
-    if not sess["lang"]:
-        if not digits:
-            g = Gather(
-                input="dtmf",
-                num_digits=1,
-                timeout=5,
-                action="/twilio-ai",
-                method="POST",
-            )
-            g.say(
-                "Willkommen beim Restaurant Viadukt Zürich. Für Deutsch drücken Sie die 1.",
-                language="de-DE",
-            )
-            g.pause(length=1)
-            g.say("For English, press 2.", language="en-US")
-            resp.append(g)
-            resp.say("Kein Input erkannt. Auf Wiedersehen.", language="de-DE")
-            return str(resp)
-
-        if digits == "1":
-            sess["lang"] = "de"
-        elif digits == "2":
-            sess["lang"] = "en"
-        else:
-            resp.say("Ungültige Eingabe. Bitte erneut versuchen.", language="de-DE")
-            return str(resp)
-
-        lang_code = "de-DE" if sess["lang"] == "de" else "en-US"
-        sess["step"] = 0
+    if not sess["started"]:
+        sess["started"] = True
 
         g = Gather(
             input="speech",
             timeout=8,
             action=url_for("twilio_ai", _external=True),
             method="POST",
-            language=lang_code,
+            language="de-DE",
         )
 
-        # Begrüßung mit MP3
-        greet_file = "de_greet.mp3" if sess["lang"] == "de" else "en_greet.mp3"
-        g.play(url_for("static_files", filename=greet_file, _external=True))
+        # Begrüßung
+        greet_url = url_for("static_files", filename="de_greet.mp3", _external=True)
+        g.play(greet_url)
 
-        # Erste Frage
-        g.say(next_question(sess["lang"], sess["step"]), language=lang_code)
+        # Erste Frage (Status)
+        q0_url = url_for("static_files", filename="de_q0_status.mp3", _external=True)
+        g.play(q0_url)
+
         resp.append(g)
+        resp.say(
+            "Leider habe ich Sie nicht verstanden. Bitte rufen Sie später erneut an.",
+            language="de-DE",
+        )
         return str(resp)
 
     # =========================
-    # 2) Antworten speichern
+    # 2) Antworten sammeln
     # =========================
-    keys = ["name", "party", "date", "time", "phone"]
+    keys = ["status", "name", "dob", "reason", "date", "time", "phone"]
+    step = sess["step"]
 
-    if sess["step"] < len(keys) and speech:
-        sess["data"][keys[sess["step"]]] = speech
-
-    sess["step"] += 1
-
-    if sess["step"] < len(keys):
-        lang = sess["lang"]
-        lang_code = "de-DE" if lang == "de" else "en-US"
-
+    # Wenn nichts verstanden wurde → gleiche Frage nochmal
+    if not speech and step < len(keys):
         g = Gather(
             input="speech",
             timeout=8,
             action=url_for("twilio_ai", _external=True),
             method="POST",
-            language=lang_code,
+            language="de-DE",
         )
 
-        # MP3 je Frage
-        audio_map = {
-            "de": [
-                "de_q1_name.mp3",
-                "de_q2_party.mp3",
-                "de_q3_date.mp3",
-                "de_q4_time.mp3",
-                "de_q5_phone.mp3",
-            ],
-            "en": [
-                "en_q1_name.mp3",
-                "en_q2_party.mp3",
-                "en_q3_date.mp3",
-                "en_q4_time.mp3",
-                "en_q5_phone.mp3",
-            ],
-        }
+        filename = question_audio_filename(step)
+        audio_path = os.path.join("static", filename)
 
-        step = sess["step"]
-        filename = audio_map[lang][step] if step < len(audio_map[lang]) else None
-
-        if filename and os.path.exists(os.path.join("static", filename)):
+        if os.path.exists(audio_path):
             g.play(url_for("static_files", filename=filename, _external=True))
         else:
-            g.say(next_question(lang, step), language=lang_code)
+            g.say(next_question_text(step), language="de-DE")
+
+        resp.append(g)
+        return str(resp)
+
+    # Wenn was gesagt wurde → speichern
+    if step < len(keys) and speech:
+        key = keys[step]
+        sess["data"][key] = speech
+        print(f"✅ {key} = {speech}")
+
+    sess["step"] += 1
+    step = sess["step"]
+
+    # Noch Fragen offen?
+    if step < len(keys):
+        g = Gather(
+            input="speech",
+            timeout=8,
+            action=url_for("twilio_ai", _external=True),
+            method="POST",
+            language="de-DE",
+        )
+
+        filename = question_audio_filename(step)
+        audio_path = os.path.join("static", filename)
+
+        if os.path.exists(audio_path):
+            g.play(url_for("static_files", filename=filename, _external=True))
+        else:
+            g.say(next_question_text(step), language="de-DE")
 
         resp.append(g)
         return str(resp)
@@ -231,11 +258,10 @@ def twilio_ai():
     # =========================
     # 3) Fertig -> Speichern + Abschied
     # =========================
-    d = sess["data"]
-    save_row(sess["lang"], d["name"], d["party"], d["date"], d["time"], d["phone"])
+    save_row(sess["data"])
 
-    farewell_file = "de_farewell.mp3" if sess["lang"] == "de" else "en_farewell.mp3"
-    resp.play(url_for("static_files", filename=farewell_file, _external=True))
+    farewell_url = url_for("static_files", filename="de_farewell.mp3", _external=True)
+    resp.play(farewell_url)
 
     SESSIONS.pop(call_sid, None)
     return str(resp)
@@ -247,8 +273,9 @@ def twilio_ai():
 if __name__ == "__main__":
     init_sheets()
     os.makedirs("static", exist_ok=True)
-    print(f"📞 SMA Voice läuft auf Port {PORT}")
+    print(f"📞 SMA Voice – Arztpraxis läuft auf Port {PORT}")
     app.run(host="0.0.0.0", port=PORT)
+
 
 
 
