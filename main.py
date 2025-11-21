@@ -237,12 +237,15 @@ def twilio_ai():
     # Noch Fragen offen?
     if step < len(keys):
         g = Gather(
-            input="speech",
-            timeout=8,
-            action=url_for("twilio_ai", _external=True),
-            method="POST",
-            language="de-DE",
-        )
+    input="speech",
+    timeout=10,  # statt 8
+    speech_timeout="auto",
+    action=url_for("twilio_ai", _external=True),
+    method="POST",
+    language="de-DE",
+)
+g.pause(length=1)
+
 
         filename = question_audio_filename(step)
         audio_path = os.path.join("static", filename)
