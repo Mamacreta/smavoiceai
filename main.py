@@ -101,7 +101,7 @@ def save_row(data: dict):
 def next_question_text(step: int) -> str:
     texts = [
         "Sind Sie bereits Patientin oder Patient bei uns? Bitte sagen Sie: ja, nein oder unsicher.",
-        "Wie lautet Ihr Vor- und Nachname?",
+        "Wie lautet Ihr Vor- und Nachname? Bitte sprechen Sie langsam und deutlich. Wenn Ihr Name schwierig ist, können Sie ihn auch Buchstabe für Buchstabe sagen.",
         "Wie ist Ihr Geburtsdatum? Bitte nennen Sie Tag, Monat und Jahr.",
         "Worum geht es bei Ihrem Anliegen? Zum Beispiel Kontrolle, akute Beschwerden, Rezept oder etwas anderes.",
         "Für welches Datum wünschen Sie einen Termin? Sie können auch sagen: so bald wie möglich.",
@@ -170,18 +170,20 @@ def twilio_ai():
     resp = VoiceResponse()
 
     # =========================
-    # 1) Erste Antwort nach Begrüßung
+    # 1) Begrüßung + erste Frage
     # =========================
     if not sess["started"]:
         sess["started"] = True
 
         g = Gather(
             input="speech",
-            timeout=8,
+            timeout=10,
+            speech_timeout="auto",
             action=url_for("twilio_ai", _external=True),
             method="POST",
             language="de-DE",
         )
+        g.pause(length=1)
 
         # Begrüßung
         greet_url = url_for("static_files", filename="de_greet.mp3", _external=True)
@@ -208,11 +210,13 @@ def twilio_ai():
     if not speech and step < len(keys):
         g = Gather(
             input="speech",
-            timeout=8,
+            timeout=10,
+            speech_timeout="auto",
             action=url_for("twilio_ai", _external=True),
             method="POST",
             language="de-DE",
         )
+        g.pause(length=1)
 
         filename = question_audio_filename(step)
         audio_path = os.path.join("static", filename)
@@ -237,15 +241,14 @@ def twilio_ai():
     # Noch Fragen offen?
     if step < len(keys):
         g = Gather(
-    input="speech",
-    timeout=10,  # statt 8
-    speech_timeout="auto",
-    action=url_for("twilio_ai", _external=True),
-    method="POST",
-    language="de-DE",
-)
-g.pause(length=1)
-
+            input="speech",
+            timeout=10,
+            speech_timeout="auto",
+            action=url_for("twilio_ai", _external=True),
+            method="POST",
+            language="de-DE",
+        )
+        g.pause(length=1)
 
         filename = question_audio_filename(step)
         audio_path = os.path.join("static", filename)
