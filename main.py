@@ -37,7 +37,8 @@ ws = None
 # =========================
 def init_sheets():
     """
-    Initialisiert Google Sheets und das Worksheet 'Appointments'.
+    Initialisiert Google Sheets und das Worksheet für SMA Voice.
+    Versucht zuerst 'SMA Voice Reservation', dann 'Appointments'.
     """
     global gc, ws
     if not (CREDS_JSON and SHEET_ID):
@@ -54,24 +55,37 @@ def init_sheets():
         gc = gspread.authorize(creds)
         sh = gc.open_by_key(SHEET_ID)
 
+        # 1. Versuch: dein Tab-Name
         try:
-            ws = sh.worksheet("Appointments")
-            print("✅ Worksheet 'Appointments' gefunden.")
+            ws_name = "SMA Voice Reservation"
+            ws_local = sh.worksheet(ws_name)
+            print(f"✅ Worksheet '{ws_name}' gefunden.")
         except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet(title="Appointments", rows=1000, cols=10)
-            ws.append_row(
-                [
-                    "Timestamp",
-                    "Status",      # bestehend / neu
-                    "Name",
-                    "Geburtsdatum",
-                    "Anliegen",
-                    "Wunschdatum",
-                    "Wunschzeit",
-                    "Telefon",
-                ]
-            )
-            print("✅ Worksheet 'Appointments' erstellt.")
+            # 2. Versuch: 'Appointments'
+            try:
+                ws_name = "Appointments"
+                ws_local = sh.worksheet(ws_name)
+                print(f"✅ Worksheet '{ws_name}' gefunden.")
+            except gspread.exceptions.WorksheetNotFound:
+                # 3. Neu anlegen mit deinem Namen
+                ws_name = "SMA Voice Reservation"
+                ws_local = sh.add_worksheet(title=ws_name, rows=1000, cols=10)
+                ws_local.append_row(
+                    [
+                        "Timestamp",
+                        "Status",      # bestehend / neu
+                        "Name",
+                        "Geburtsdatum",
+                        "Anliegen",
+                        "Wunschdatum",
+                        "Wunschzeit",
+                        "Telefon",
+                    ]
+                )
+                print(f"✅ Worksheet '{ws_name}' erstellt.")
+
+        globals()["ws"] = ws_local
+
     except Exception as e:
         print("❌ init_sheets Fehler:", e)
 
@@ -119,13 +133,17 @@ def next_question_text(step: int) -> str:
 
 
 def question_audio_filename(step: int) -> str:
+    """
+    Ordnet jeden Schritt der richtigen MP3-Datei zu.
+    WICHTIG: Dateinamen müssen GENAU so im static/-Ordner liegen.
+    """
     files = [
         "de_q0_status.mp3",     # 0 – Status
         "de_q1_name.mp3",       # 1 – Name
         "de_q2_dob.mp3",        # 2 – Geburtsdatum
         "de_q3_reason.mp3",     # 3 – Anliegen
-        "de_q5_time.mp3",       # 4 – Datum (DEINE bestehende Datei)
-        "de_q5_uhrzeit.mp3",    # 5 – Uhrzeit (NEUE Datei)
+        "de_q4_date.mp3",       # 4 – DATUM → eigene Datei
+        "de_q5_uhrzeit.mp3",    # 5 – UHRZEIT → andere Datei
         "de_q6_phone.mp3",      # 6 – Telefon
     ]
     return files[step]
@@ -310,6 +328,7 @@ if __name__ == "__main__":
     os.makedirs("static", exist_ok=True)
     print(f"📞 SMA Voice – Arztpraxis läuft auf Port {PORT}")
     app.run(host="0.0.0.0", port=PORT)
+
 
 
 
