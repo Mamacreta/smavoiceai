@@ -25,7 +25,8 @@ PORT = int(os.getenv("PORT", "10000"))
 SHEET_ID = os.getenv("SHEET_ID", "")
 CREDS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
 
-SESSIONS = {}  # { CallSid: {"step": int, "started": bool, "data": {...}} }
+# { CallSid: {"step": int, "started": bool, "data": {...}} }
+SESSIONS = {}
 
 gc = None
 ws = None
@@ -35,6 +36,9 @@ ws = None
 # Google Sheets Setup
 # =========================
 def init_sheets():
+    """
+    Initialisiert Google Sheets und das Worksheet 'Appointments'.
+    """
     global gc, ws
     if not (CREDS_JSON and SHEET_ID):
         print("⚠️  GOOGLE_CREDENTIALS_JSON oder SHEET_ID fehlt.")
@@ -73,6 +77,9 @@ def init_sheets():
 
 
 def save_row(data: dict):
+    """
+    Speichert einen Termin in Google Sheets.
+    """
     try:
         if ws is None:
             print("⚠️  ws ist None – nichts gespeichert.")
@@ -142,135 +149,154 @@ def health():
 # =========================
 @app.route("/twilio-ai", methods=["POST"])
 def twilio_ai():
-    call_sid = request.form.get("CallSid", "NA")
-    speech = (request.form.get("SpeechResult") or "").strip()
+    try:
+        call_sid = request.form.get("CallSid", "NA")
+        raw_speech = request.form.get("SpeechResult") or ""
+        # leichte Bereinigung für komische Zeichen
+        speech = raw_speech.strip().replace("’", "'").replace("`", "'")
 
-    print("---- /twilio-ai ----")
-    print("CallSid:", call_sid)
-    print("SpeechResult:", speech)
+        print("---- /twilio-ai ----")
+        print("CallSid:", call_sid)
+        print("SpeechResult (raw):", raw_speech)
 
-    # Session holen / erstellen
-    sess = SESSIONS.get(call_sid)
-    if not sess:
-        sess = {
-            "started": False,
-            "step": 0,
-            "data": {
-                "status": "",
-                "name": "",
-                "dob": "",
-                "reason": "",
-                "date": "",
-                "time": "",
-                "phone": "",
-            },
-        }
-        SESSIONS[call_sid] = sess
+        # Session holen / erstellen
+        sess = SESSIONS.get(call_sid)
+        if not sess:
+            sess = {
+                "started": False,
+                "step": 0,
+                "data": {
+                    "status": "",
+                    "name": "",
+                    "dob": "",
+                    "reason": "",
+                    "date": "",
+                    "time": "",
+                    "phone": "",
+                },
+            }
+            SESSIONS[call_sid] = sess
 
-    resp = VoiceResponse()
+        resp = VoiceResponse()
 
-    # =========================
-    # 1) Begrüßung + erste Frage
-    # =========================
-    if not sess["started"]:
-        sess["started"] = True
+        # =========================
+        # 1) Begrüßung + erste Frage
+        # =========================
+        if not sess["started"]:
+            sess["started"] = True
 
-        g = Gather(
-            input="speech",
-            timeout=10,
-            speech_timeout="auto",
-            action=url_for("twilio_ai", _external=True),
-            method="POST",
-            language="de-DE",
+            g = Gather(
+                input="speech",
+                timeout=10,
+                speech_timeout="auto",
+                action=url_for("twilio_ai", _external=True),
+                method="POST",
+                language="de-DE",
+            )
+            g.pause(length=1)
+
+            # Begrüßung
+            greet_url = url_for(
+                "static_files", filename="de_greet.mp3", _external=True
+            )
+            g.play(greet_url)
+
+            # Erste Frage (Status)
+            q0_url = url_for(
+                "static_files", filename="de_q0_status.mp3", _external=True
+            )
+            g.play(q0_url)
+
+            resp.append(g)
+            resp.say(
+                "Leider habe ich Sie nicht verstanden. Bitte rufen Sie später erneut an.",
+                language="de-DE",
+            )
+            return str(resp)
+
+        # =========================
+        # 2) Antworten sammeln
+        # =========================
+        keys = ["status", "name", "dob", "reason", "date", "time", "phone"]
+        step = sess["step"]
+
+        # Wenn nichts verstanden wurde → gleiche Frage nochmal
+        if not speech and step < len(keys):
+            g = Gather(
+                input="speech",
+                timeout=10,
+                speech_timeout="auto",
+                action=url_for("twilio_ai", _external=True),
+                method="POST",
+                language="de-DE",
+            )
+            g.pause(length=1)
+
+            filename = question_audio_filename(step)
+            audio_path = os.path.join("static", filename)
+
+            if os.path.exists(audio_path):
+                g.play(url_for("static_files", filename=filename, _external=True))
+            else:
+                g.say(next_question_text(step), language="de-DE")
+
+            resp.append(g)
+            return str(resp)
+
+        # Wenn was gesagt wurde → speichern
+        if step < len(keys) and speech:
+            key = keys[step]
+            sess["data"][key] = speech
+            print(f"✅ {key} = {speech}")
+
+        sess["step"] += 1
+        step = sess["step"]
+
+        # Noch Fragen offen?
+        if step < len(keys):
+            g = Gather(
+                input="speech",
+                timeout=10,
+                speech_timeout="auto",
+                action=url_for("twilio_ai", _external=True),
+                method="POST",
+                language="de-DE",
+            )
+            g.pause(length=1)
+
+            filename = question_audio_filename(step)
+            audio_path = os.path.join("static", filename)
+
+            if os.path.exists(audio_path):
+                g.play(url_for("static_files", filename=filename, _external=True))
+            else:
+                g.say(next_question_text(step), language="de-DE")
+
+            resp.append(g)
+            return str(resp)
+
+        # =========================
+        # 3) Fertig -> Speichern + Abschied
+        # =========================
+        save_row(sess["data"])
+
+        farewell_url = url_for(
+            "static_files", filename="de_farewell.mp3", _external=True
         )
-        g.pause(length=1)
+        resp.play(farewell_url)
 
-        # Begrüßung
-        greet_url = url_for("static_files", filename="de_greet.mp3", _external=True)
-        g.play(greet_url)
+        SESSIONS.pop(call_sid, None)
+        return str(resp)
 
-        # Erste Frage (Status)
-        q0_url = url_for("static_files", filename="de_q0_status.mp3", _external=True)
-        g.play(q0_url)
-
-        resp.append(g)
+    except Exception as e:
+        # Fängt alles ab, damit Twilio nicht "Application Error" schreit
+        print("❌ twilio_ai error:", e)
+        resp = VoiceResponse()
         resp.say(
-            "Leider habe ich Sie nicht verstanden. Bitte rufen Sie später erneut an.",
+            "Leider ist ein technischer Fehler aufgetreten. Bitte rufen Sie später erneut an.",
             language="de-DE",
         )
         return str(resp)
-
-    # =========================
-    # 2) Antworten sammeln
-    # =========================
-    keys = ["status", "name", "dob", "reason", "date", "time", "phone"]
-    step = sess["step"]
-
-    # Wenn nichts verstanden wurde → gleiche Frage nochmal
-    if not speech and step < len(keys):
-        g = Gather(
-            input="speech",
-            timeout=10,
-            speech_timeout="auto",
-            action=url_for("twilio_ai", _external=True),
-            method="POST",
-            language="de-DE",
-        )
-        g.pause(length=1)
-
-        filename = question_audio_filename(step)
-        audio_path = os.path.join("static", filename)
-
-        if os.path.exists(audio_path):
-            g.play(url_for("static_files", filename=filename, _external=True))
-        else:
-            g.say(next_question_text(step), language="de-DE")
-
-        resp.append(g)
-        return str(resp)
-
-    # Wenn was gesagt wurde → speichern
-    if step < len(keys) and speech:
-        key = keys[step]
-        sess["data"][key] = speech
-        print(f"✅ {key} = {speech}")
-
-    sess["step"] += 1
-    step = sess["step"]
-
-    # Noch Fragen offen?
-    if step < len(keys):
-        g = Gather(
-            input="speech",
-            timeout=10,
-            speech_timeout="auto",
-            action=url_for("twilio_ai", _external=True),
-            method="POST",
-            language="de-DE",
-        )
-        g.pause(length=1)
-
-        filename = question_audio_filename(step)
-        audio_path = os.path.join("static", filename)
-
-        if os.path.exists(audio_path):
-            g.play(url_for("static_files", filename=filename, _external=True))
-        else:
-            g.say(next_question_text(step), language="de-DE")
-
-        resp.append(g)
-        return str(resp)
-
-    # =========================
-    # 3) Fertig -> Speichern + Abschied
-    # =========================
-    save_row(sess["data"])
-
-    farewell_url = url_for("static_files", filename="de_farewell.mp3", _external=True)
-    resp.play(farewell_url)
-
-    SESSIONS.pop(call_sid, None)
-    return str(resp)
 
 
 # =========================
@@ -281,6 +307,7 @@ if __name__ == "__main__":
     os.makedirs("static", exist_ok=True)
     print(f"📞 SMA Voice – Arztpraxis läuft auf Port {PORT}")
     app.run(host="0.0.0.0", port=PORT)
+
 
 
 
