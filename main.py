@@ -120,13 +120,13 @@ def next_question_text(step: int) -> str:
 
 def question_audio_filename(step: int) -> str:
     files = [
-        "de_q0_status.mp3",
-        "de_q1_name.mp3",
-        "de_q2_dob.mp3",
-        "de_q3_reason.mp3",
-        "de_q4_date.mp3",
-        "de_q5_time.mp3",
-        "de_q6_phone.mp3",
+        "de_q0_status.mp3",     # 0 – Status
+        "de_q1_name.mp3",       # 1 – Name
+        "de_q2_dob.mp3",        # 2 – Geburtsdatum
+        "de_q3_reason.mp3",     # 3 – Anliegen
+        "de_q5_time.mp3",       # 4 – Datum (DEINE bestehende Datei)
+        "de_q5_uhrzeit.mp3",    # 5 – Uhrzeit (NEUE Datei)
+        "de_q6_phone.mp3",      # 6 – Telefon
     ]
     return files[step]
 
@@ -240,9 +240,7 @@ def twilio_ai():
             g.pause(length=1)
 
             filename = question_audio_filename(step)
-            audio_path = os.path.join("static", filename)
-
-            if os.path.exists(audio_path):
+            if os.path.exists(os.path.join("static", filename)):
                 g.play(url_for("static_files", filename=filename, _external=True))
             else:
                 g.say(next_question_text(step), language="de-DE")
@@ -272,9 +270,7 @@ def twilio_ai():
             g.pause(length=1)
 
             filename = question_audio_filename(step)
-            audio_path = os.path.join("static", filename)
-
-            if os.path.exists(audio_path):
+            if os.path.exists(os.path.join("static", filename)):
                 g.play(url_for("static_files", filename=filename, _external=True))
             else:
                 g.say(next_question_text(step), language="de-DE")
@@ -314,6 +310,7 @@ if __name__ == "__main__":
     os.makedirs("static", exist_ok=True)
     print(f"📞 SMA Voice – Arztpraxis läuft auf Port {PORT}")
     app.run(host="0.0.0.0", port=PORT)
+
 
 
 
