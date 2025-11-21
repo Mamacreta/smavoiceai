@@ -150,18 +150,19 @@ def health():
 @app.route("/twilio-ai", methods=["GET", "POST"])
 def twilio_ai():
     try:
-        # Twilio schickt SpeechResult bei POST, bei GET manchmal Status-Updates
-        if request.method == "GET":
-            # Ignorier GET, aber crash nicht
-            print("ℹ️ GET /twilio-ai von Twilio (Status-Callback), wird ignoriert.")
-            return "ok", 200
+        # Twilio kann Action sowohl als GET (mit Query-Params) als auch POST schicken
+        if request.method == "POST":
+            data = request.form
+        else:
+            data = request.args
 
-        call_sid = request.form.get("CallSid", "NA")
-        raw_speech = request.form.get("SpeechResult") or ""
+        call_sid = data.get("CallSid", "NA")
+        raw_speech = data.get("SpeechResult") or ""
         # leichte Bereinigung für komische Zeichen
         speech = raw_speech.strip().replace("’", "'").replace("`", "'")
 
         print("---- /twilio-ai ----")
+        print("Method:", request.method)
         print("CallSid:", call_sid)
         print("SpeechResult (raw):", raw_speech)
 
@@ -313,6 +314,7 @@ if __name__ == "__main__":
     os.makedirs("static", exist_ok=True)
     print(f"📞 SMA Voice – Arztpraxis läuft auf Port {PORT}")
     app.run(host="0.0.0.0", port=PORT)
+
 
 
 
