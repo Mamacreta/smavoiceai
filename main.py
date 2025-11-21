@@ -108,7 +108,7 @@ def save_row(data: dict):
 def next_question_text(step: int) -> str:
     texts = [
         "Sind Sie bereits Patientin oder Patient bei uns? Bitte sagen Sie: ja, nein oder unsicher.",
-        "Wie lautet Ihr Vor- und Nachname? Bitte sprechen Sie langsam und deutlich. Wenn Ihr Name schwierig ist, können Sie ihn auch Buchstabe für Buchstabe sagen.",
+        "Wie lautet Ihr Vor- und Nachname? Bitte sprechen oder buchstabieren Sie Ihren Namen langsam. Bei ä, ö oder ü sagen Sie bitte: a-e, o-e oder u-e.",
         "Wie ist Ihr Geburtsdatum? Bitte nennen Sie Tag, Monat und Jahr.",
         "Worum geht es bei Ihrem Anliegen? Zum Beispiel Kontrolle, akute Beschwerden, Rezept oder etwas anderes.",
         "Für welches Datum wünschen Sie einen Termin? Sie können auch sagen: so bald wie möglich.",
@@ -147,9 +147,15 @@ def health():
 # =========================
 # Twilio Webhook
 # =========================
-@app.route("/twilio-ai", methods=["POST"])
+@app.route("/twilio-ai", methods=["GET", "POST"])
 def twilio_ai():
     try:
+        # Twilio schickt SpeechResult bei POST, bei GET manchmal Status-Updates
+        if request.method == "GET":
+            # Ignorier GET, aber crash nicht
+            print("ℹ️ GET /twilio-ai von Twilio (Status-Callback), wird ignoriert.")
+            return "ok", 200
+
         call_sid = request.form.get("CallSid", "NA")
         raw_speech = request.form.get("SpeechResult") or ""
         # leichte Bereinigung für komische Zeichen
@@ -307,6 +313,7 @@ if __name__ == "__main__":
     os.makedirs("static", exist_ok=True)
     print(f"📞 SMA Voice – Arztpraxis läuft auf Port {PORT}")
     app.run(host="0.0.0.0", port=PORT)
+
 
 
 
