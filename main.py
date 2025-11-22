@@ -62,14 +62,14 @@ def init_sheets():
                 ws_local.append_row(
                     [
                         "Timestamp",
-                        "Status",      # bestehend / neu
+                        "Status",
                         "Nachname",
                         "Geburtsdatum",
                         "Anliegen",
                         "Wunschdatum",
                         "Wunschzeit",
                         "Telefon",
-                        "NameNotiz",   # Name unsicher / falsch erkannt
+                        "NameNotiz",
                     ]
                 )
                 print(f"✅ Worksheet '{ws_name}' erstellt.")
@@ -105,12 +105,12 @@ def save_row(data: dict):
 
 
 # =========================
-# Helper für Fragen
+# Fragen
 # =========================
 def next_question_text(step: int) -> str:
     texts = [
         "Sind Sie bereits Patientin oder Patient bei uns? Bitte sagen Sie: ja, nein oder unsicher.",
-        "Wie lautet Ihr Nachname? Falls das System Ihren Namen nicht korrekt versteht, sagen Sie bitte: falsch. Wir klären das im Rückruf.",
+        "Wie lautet Ihr Nachname? Falls das System Ihren Namen nicht korrekt versteht, sagen Sie bitte: Name falsch. Wir klären das im Rückruf.",
         "Wie ist Ihr Geburtsdatum? Bitte nennen Sie Tag, Monat und Jahr.",
         "Worum geht es bei Ihrem Anliegen? Zum Beispiel Kontrolle, akute Beschwerden, Rezept oder etwas anderes.",
         "Für welches Datum wünschen Sie einen Termin? Sie können auch sagen: so bald wie möglich.",
@@ -122,13 +122,13 @@ def next_question_text(step: int) -> str:
 
 def question_audio_filename(step: int) -> str:
     files = [
-        "de_q0_status.mp3",      # 0 – Status
-        "de_q1_lastname.mp3",    # 1 – Nachname
-        "de_q2_dob.mp3",         # 2 – Geburtsdatum
-        "de_q3_reason.mp3",      # 3 – Anliegen
-        "de_q4_date.mp3",        # 4 – Wunschdatum
-        "de_q5_uhrzeit.mp3",     # 5 – Uhrzeit
-        "de_q6_phone.mp3",       # 6 – Telefon
+        "de_q0_status.mp3",
+        "de_q1_lastname.mp3",
+        "de_q2_dob.mp3",
+        "de_q3_reason.mp3",
+        "de_q4_date.mp3",
+        "de_q5_uhrzeit.mp3",
+        "de_q6_phone.mp3",
     ]
     return files[step]
 
@@ -191,7 +191,7 @@ def twilio_ai():
             }
             SESSIONS[call_sid] = sess
 
-        # 1) Erster Durchlauf: Begrüßung + erste Frage
+        # 1) Start: Begrüßung
         if not sess["started"]:
             sess["started"] = True
 
@@ -214,11 +214,11 @@ def twilio_ai():
             resp.append(g)
             return str(resp)
 
-        # 2) spätere Schritte: Antworten sammeln
+        # 2) weitere Schritte
         keys = ["status", "lastname", "dob", "reason", "date", "time", "phone"]
         step = sess["step"]
 
-        # nichts verstanden → gleiche Frage nochmal
+        # Wenn nichts verstanden
         if not speech and step < len(keys):
             g = Gather(
                 input="speech",
@@ -233,27 +233,22 @@ def twilio_ai():
             resp.append(g)
             return str(resp)
 
-        # etwas gesagt
+        # Antwort vorhanden
         if step < len(keys) and speech:
             key = keys[step]
 
-            # Spezialfall Nachname
+            # SPEZIALFALL NACHNAME
             if key == "lastname":
                 text_lower = speech.lower()
 
-                # Patient meldet, dass Nachname falsch erkannt wurde
-                if (
-                    "falsch" in text_lower
-                    or "nicht richtig" in text_lower
-                    or "stimmt nicht" in text_lower
-                ):
+                # Dein exakter Trigger
+                if "name falsch" in text_lower:
                     sess["data"]["name_note"] = (
                         "Patient meldet: Nachname wurde falsch erkannt – bitte im Rückruf klären."
                     )
-                    print("⚠️ Patient meldet: Name nicht richtig. Flag in Sheet gesetzt.")
+                    print("⚠️ Patient sagt 'Name falsch'. Rückruf-Flag gesetzt.")
 
-                    # optional: trotzdem den erkannten Text speichern
-                    sess["data"]["lastname"] = speech
+                    sess["data"]["lastname"] = speech  # optional speichern
 
                     sess["step"] += 1
                     next_step = sess["step"]
@@ -269,8 +264,7 @@ def twilio_ai():
                     g.pause(length=1)
 
                     g.say(
-                        "Alles klar. Ich notiere, dass wir Ihren Namen beim Rückruf klären. "
-                        "Fahren wir fort.",
+                        "Alles klar. Ich notiere, dass wir Ihren Namen beim Rückruf klären. Fahren wir fort.",
                         language="de-DE",
                     )
 
@@ -279,7 +273,7 @@ def twilio_ai():
                     resp.append(g)
                     return str(resp)
 
-            # normaler Fall: Feld speichern
+            # normal speichern
             sess["data"][key] = speech
             print(f"✅ {key} = {speech}")
 
@@ -301,7 +295,7 @@ def twilio_ai():
             resp.append(g)
             return str(resp)
 
-        # 3) fertig → speichern + Verabschiedung
+        # 3) speichern & Verabschiedung
         save_row(sess["data"])
 
         farewell_url = url_for("static_files", filename="de_farewell.mp3", _external=True)
@@ -320,7 +314,7 @@ def twilio_ai():
 
 
 # =========================
-# Init & Main
+# Init & Start
 # =========================
 init_sheets()
 os.makedirs("static", exist_ok=True)
