@@ -17,7 +17,7 @@ PORT = int(os.getenv("PORT", "10000"))
 SHEET_ID = os.getenv("SHEET_ID", "")
 CREDS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
 
-# WICHTIG: deine öffentliche Render-URL
+# Deine öffentliche Render-URL
 BASE_URL = os.getenv("BASE_URL", "https://smavoiceai.onrender.com").rstrip("/")
 
 SESSIONS = {}
@@ -26,12 +26,12 @@ ws = None
 
 
 def static_url(filename: str) -> str:
-    """Absolute URL für MP3s, die Twilio abspielen soll."""
+    """Absolute URL für MP3s."""
     return f"{BASE_URL}/static/{filename}"
 
 
 def action_url() -> str:
-    """Absolute URL für das nächste /twilio-ai."""
+    """Absolute URL für /twilio-ai."""
     return f"{BASE_URL}/twilio-ai"
 
 
@@ -68,17 +68,19 @@ def init_sheets():
             print("✅ Worksheet 'SMA Voice Reservation' gefunden.")
         except gspread.exceptions.WorksheetNotFound:
             ws_local = sh.add_worksheet("SMA Voice Reservation", rows=1000, cols=10)
-            ws_local.append_row([
-                "Timestamp",
-                "Status",
-                "Nachname",
-                "Geburtsdatum",
-                "Anliegen",
-                "Wunschdatum",
-                "Wunschzeit",
-                "Telefon",
-                "Notiz",
-            ])
+            ws_local.append_row(
+                [
+                    "Timestamp",
+                    "Status",
+                    "Nachname",
+                    "Geburtsdatum",
+                    "Anliegen",
+                    "Wunschdatum",
+                    "Wunschzeit",
+                    "Telefon",
+                    "Notiz",
+                ]
+            )
             print("✅ Worksheet 'SMA Voice Reservation' erstellt.")
 
         ws = ws_local
@@ -94,17 +96,19 @@ def save_row(data):
         return
     try:
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
-        ws.append_row([
-            ts,
-            data.get("status", ""),
-            data.get("lastname", ""),
-            data.get("dob", ""),
-            data.get("reason", ""),
-            data.get("date", ""),
-            data.get("time", ""),
-            data.get("phone", ""),
-            data.get("note", ""),
-        ])
+        ws.append_row(
+            [
+                ts,
+                data.get("status", ""),
+                data.get("lastname", ""),
+                data.get("dob", ""),
+                data.get("reason", ""),
+                data.get("date", ""),
+                data.get("time", ""),
+                data.get("phone", ""),
+                data.get("note", ""),
+            ]
+        )
         print("✅ Termin gespeichert.")
     except Exception as e:
         print("❌ save_row error:", e)
@@ -113,38 +117,63 @@ def save_row(data):
 # =========================
 # Helpers
 # =========================
-def clean_name(raw):
+def clean_name(raw: str) -> str:
     if not raw:
         return ""
     return raw.strip().strip(" .,;:!")
 
 
-def clean_phone(raw):
+def clean_phone(raw: str) -> str:
     return re.sub(r"\D", "", raw or "")
 
 
-def next_question_text(step):
+def format_dob_from_digits(digits: str) -> str:
+    """
+    Erwartet 6 (DDMMYY) oder 8 (DDMMYYYY) Ziffern.
+    Gibt z.B. '01.08.2007' zurück.
+    """
+    d = re.sub(r"\D", "", digits or "")
+    if len(d) == 6:
+        dd = d[0:2]
+        mm = d[2:4]
+        yy = d[4:6]
+        yy_int = int(yy)
+        if yy_int <= 30:
+            year = f"20{yy}"
+        else:
+            year = f"19{yy}"
+        return f"{dd}.{mm}.{year}"
+    elif len(d) == 8:
+        dd = d[0:2]
+        mm = d[2:4]
+        year = d[4:8]
+        return f"{dd}.{mm}.{year}"
+    else:
+        return d
+
+
+def next_question_text(step: int) -> str:
     texts = [
         "Sind Sie bereits Patientin oder Patient bei uns? Bitte sagen Sie: ja, nein oder unsicher.",
         "Wie lautet Ihr Nachname? Die Praxis wird Ihren Namen beim Rückruf bestätigen.",
-        "Wie ist Ihr Geburtsdatum? Bitte sagen Sie Tag, Monat und Jahr.",
+        "Bitte geben Sie jetzt Ihr Geburtsdatum als sechsstellige Zahl ein, zum Beispiel 010807 für den ersten August zweitausendsieben.",
         "Worum geht es bei Ihrem Anliegen? Bitte sagen Sie: Kontrolle, Rezept, akute Beschwerden, administrativ oder anderes Anliegen.",
         "Wann wünschen Sie ungefähr den Termin? Sagen Sie: heute, diese Woche, nächste Woche oder egal.",
         "Zu welcher Tageszeit passt es Ihnen am besten? Sagen Sie: morgens, nachmittags oder egal.",
-        "Bitte geben Sie jetzt Ihre Telefonnummer über die Telefontastatur ein.",
+        "Bitte geben Sie jetzt Ihre Telefonnummer mit zehn Ziffern über die Telefontastatur ein.",
     ]
     return texts[step]
 
 
-def question_audio_filename(step):
+def question_audio_filename(step: int) -> str:
     files = [
-        "de_q0_status.mp3",
-        "de_q1_lastname.mp3",
-        "de_q2_dob.mp3",
-        "de_q3_reason.mp3",
-        "de_q4_date.mp3",
-        "de_q5_uhrzeit.mp3",
-        "de_q6_phone.mp3",
+        "de_q0_status.mp3",   # 0 Status
+        "de_q1_lastname.mp3", # 1 Nachname
+        "de_q2_dob.mp3",      # 2 Geburtsdatum (DTMF)
+        "de_q3_reason.mp3",   # 3 Anliegen
+        "de_q4_date.mp3",     # 4 Zeitraum
+        "de_q5_uhrzeit.mp3",  # 5 Tageszeit
+        "de_q6_phone.mp3",    # 6 Telefon (DTMF)
     ]
     return files[step]
 
@@ -159,14 +188,27 @@ def play_question(g: Gather, step: int):
 
 
 def create_gather(step: int) -> Gather:
-    """Gather für den jeweiligen Schritt bauen."""
+    """
+    step 0,1,3,4,5 = Speech
+    step 2 (dob)   = DTMF (bis 8 Ziffern)
+    step 6 (phone) = DTMF (10 Ziffern)
+    """
+    is_dob = (step == 2)
     is_phone = (step == 6)
 
-    if is_phone:
+    if is_dob:
         g = Gather(
             input="dtmf",
-            timeout=10,
-            num_digits=15,
+            timeout=15,
+            num_digits=8,   # erlaubt 6 oder 8 Ziffern (z.B. 010807 oder 01082007)
+            action=action_url(),
+            method="POST",
+        )
+    elif is_phone:
+        g = Gather(
+            input="dtmf",
+            timeout=15,
+            num_digits=10,  # z.B. 0761234567
             action=action_url(),
             method="POST",
         )
@@ -247,20 +289,24 @@ def twilio_ai():
                 language="de-DE",
             )
             g.pause(length=1)
-
-            # Begrüßung + erste Frage
             g.play(static_url("de_greet.mp3"))
             g.play(static_url("de_q0_status.mp3"))
 
             resp.append(g)
             return str(resp)
 
-        # Weitere Schritte
         keys = ["status", "lastname", "dob", "reason", "date", "time", "phone"]
         step = sess["step"]
 
+        # Wenn gar nichts gesagt/getippt wurde → gleiche Frage wiederholen
+        if not speech and not digits and step < len(keys):
+            print("⚠️ Keine Eingabe – Frage wird wiederholt, step =", step)
+            g = create_gather(step)
+            resp.append(g)
+            return str(resp)
+
+        # Wenn wir schon alles haben → speichern & Goodbye
         if step >= len(keys):
-            # schon alles gesammelt → speichern & Goodbye
             save_row(sess["data"])
             resp.play(static_url("de_farewell.mp3"))
             SESSIONS.pop(call_sid, None)
@@ -268,14 +314,21 @@ def twilio_ai():
 
         key = keys[step]
 
-        # Antwort speichern
+        # Antwort speichern je nach Feld
         if key == "phone":
-            phone_clean = clean_phone(digits or speech)
+            phone_clean = clean_phone(digits)
             sess["data"]["phone"] = phone_clean
             print("✅ phone =", phone_clean)
+
+        elif key == "dob":
+            dob_formatted = format_dob_from_digits(digits)
+            sess["data"]["dob"] = dob_formatted
+            print("✅ dob =", dob_formatted)
+
         elif key == "lastname":
             sess["data"]["lastname"] = clean_name(speech)
             print("✅ lastname =", sess["data"]["lastname"])
+
         else:
             sess["data"][key] = speech
             print(f"✅ {key} =", speech)
@@ -289,7 +342,7 @@ def twilio_ai():
             resp.append(g)
             return str(resp)
 
-        # Alles gesammelt → speichern & Goodbye
+        # Alles eingesammelt → speichern & Verabschiedung
         save_row(sess["data"])
         resp.play(static_url("de_farewell.mp3"))
         SESSIONS.pop(call_sid, None)
@@ -310,6 +363,7 @@ print("✅ SMA Voice – Arztpraxis gestartet mit BASE_URL:", BASE_URL)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
+
 
 
 
