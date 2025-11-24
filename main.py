@@ -3,20 +3,36 @@ import json
 import time
 import re
 
-from flask import Flask, request, send_from_directory, url_for
+from flask import Flask, request, send_from_directory
 from twilio.twiml.voice_response import VoiceResponse, Gather
 import gspread
 from google.oauth2.service_account import Credentials
 
+# =========================
+# Flask & Config
+# =========================
 app = Flask(__name__, static_folder="static")
 PORT = int(os.getenv("PORT", "10000"))
 
 SHEET_ID = os.getenv("SHEET_ID", "")
 CREDS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
 
+# WICHTIG: deine öffentliche Render-URL
+BASE_URL = os.getenv("BASE_URL", "https://smavoiceai.onrender.com").rstrip("/")
+
 SESSIONS = {}
 gc = None
 ws = None
+
+
+def static_url(filename: str) -> str:
+    """Absolute URL für MP3s, die Twilio abspielen soll."""
+    return f"{BASE_URL}/static/{filename}"
+
+
+def action_url() -> str:
+    """Absolute URL für das nächste /twilio-ai."""
+    return f"{BASE_URL}/twilio-ai"
 
 
 # =========================
@@ -41,16 +57,18 @@ def init_sheets():
         if "https://docs.google.com" in sheet_key:
             try:
                 sheet_key = sheet_key.split("/d/")[1].split("/")[0]
-            except:
+            except Exception as e:
+                print("❌ sheet_key extract error:", e)
                 return
 
         sh = gc.open_by_key(sheet_key)
 
         try:
-            ws = sh.worksheet("SMA Voice Reservation")
+            ws_local = sh.worksheet("SMA Voice Reservation")
+            print("✅ Worksheet 'SMA Voice Reservation' gefunden.")
         except gspread.exceptions.WorksheetNotFound:
-            ws = sh.add_worksheet("SMA Voice Reservation", rows=1000, cols=10)
-            ws.append_row([
+            ws_local = sh.add_worksheet("SMA Voice Reservation", rows=1000, cols=10)
+            ws_local.append_row([
                 "Timestamp",
                 "Status",
                 "Nachname",
@@ -59,9 +77,11 @@ def init_sheets():
                 "Wunschdatum",
                 "Wunschzeit",
                 "Telefon",
-                "Notiz"
+                "Notiz",
             ])
+            print("✅ Worksheet 'SMA Voice Reservation' erstellt.")
 
+        ws = ws_local
         globals()["ws"] = ws
 
     except Exception as e:
@@ -70,6 +90,7 @@ def init_sheets():
 
 def save_row(data):
     if ws is None:
+        print("⚠️ ws ist None – nichts gespeichert.")
         return
     try:
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -82,8 +103,9 @@ def save_row(data):
             data.get("date", ""),
             data.get("time", ""),
             data.get("phone", ""),
-            data.get("note", "")
+            data.get("note", ""),
         ])
+        print("✅ Termin gespeichert.")
     except Exception as e:
         print("❌ save_row error:", e)
 
@@ -109,7 +131,7 @@ def next_question_text(step):
         "Worum geht es bei Ihrem Anliegen? Bitte sagen Sie: Kontrolle, Rezept, akute Beschwerden, administrativ oder anderes Anliegen.",
         "Wann wünschen Sie ungefähr den Termin? Sagen Sie: heute, diese Woche, nächste Woche oder egal.",
         "Zu welcher Tageszeit passt es Ihnen am besten? Sagen Sie: morgens, nachmittags oder egal.",
-        "Bitte geben Sie jetzt Ihre Telefonnummer über die Telefontastatur ein."
+        "Bitte geben Sie jetzt Ihre Telefonnummer über die Telefontastatur ein.",
     ]
     return texts[step]
 
@@ -122,21 +144,22 @@ def question_audio_filename(step):
         "de_q3_reason.mp3",
         "de_q4_date.mp3",
         "de_q5_uhrzeit.mp3",
-        "de_q6_phone.mp3"
+        "de_q6_phone.mp3",
     ]
     return files[step]
 
 
-def play_question(g, step):
+def play_question(g: Gather, step: int):
     filename = question_audio_filename(step)
     path = os.path.join("static", filename)
     if os.path.exists(path):
-        g.play(url_for("static_files", filename=filename, _external=True))
+        g.play(static_url(filename))
     else:
         g.say(next_question_text(step), language="de-DE")
 
 
-def create_gather(step):
+def create_gather(step: int) -> Gather:
+    """Gather für den jeweiligen Schritt bauen."""
     is_phone = (step == 6)
 
     if is_phone:
@@ -144,17 +167,17 @@ def create_gather(step):
             input="dtmf",
             timeout=10,
             num_digits=15,
-            action=url_for("twilio_ai", _external=True),
-            method="POST"
+            action=action_url(),
+            method="POST",
         )
     else:
         g = Gather(
             input="speech",
             timeout=10,
             speech_timeout="auto",
-            action=url_for("twilio_ai", _external=True),
+            action=action_url(),
             method="POST",
-            language="de-DE"
+            language="de-DE",
         )
 
     g.pause(length=1)
@@ -188,6 +211,11 @@ def twilio_ai():
         speech = (data.get("SpeechResult") or "").strip()
         digits = (data.get("Digits") or "").strip()
 
+        print("---- /twilio-ai ----")
+        print("CallSid:", call_sid)
+        print("SpeechResult:", speech)
+        print("Digits:", digits)
+
         sess = SESSIONS.get(call_sid)
         if not sess:
             sess = {
@@ -201,12 +229,12 @@ def twilio_ai():
                     "date": "",
                     "time": "",
                     "phone": "",
-                    "note": ""
-                }
+                    "note": "",
+                },
             }
             SESSIONS[call_sid] = sess
 
-        # Start
+        # Start: Begrüßung + Status
         if not sess["started"]:
             sess["started"] = True
 
@@ -214,59 +242,75 @@ def twilio_ai():
                 input="speech",
                 timeout=10,
                 speech_timeout="auto",
-                action=url_for("twilio_ai", _external=True),
+                action=action_url(),
                 method="POST",
-                language="de-DE"
+                language="de-DE",
             )
             g.pause(length=1)
 
-            g.play(url_for("static_files", filename="de_greet.mp3", _external=True))
-            g.play(url_for("static_files", filename="de_q0_status.mp3", _external=True))
+            # Begrüßung + erste Frage
+            g.play(static_url("de_greet.mp3"))
+            g.play(static_url("de_q0_status.mp3"))
 
             resp.append(g)
             return str(resp)
 
+        # Weitere Schritte
         keys = ["status", "lastname", "dob", "reason", "date", "time", "phone"]
         step = sess["step"]
+
         if step >= len(keys):
+            # schon alles gesammelt → speichern & Goodbye
             save_row(sess["data"])
-            resp.play(url_for("static_files", filename="de_farewell.mp3", _external=True))
+            resp.play(static_url("de_farewell.mp3"))
             SESSIONS.pop(call_sid, None)
             return str(resp)
 
         key = keys[step]
 
+        # Antwort speichern
         if key == "phone":
             phone_clean = clean_phone(digits or speech)
             sess["data"]["phone"] = phone_clean
+            print("✅ phone =", phone_clean)
         elif key == "lastname":
             sess["data"]["lastname"] = clean_name(speech)
+            print("✅ lastname =", sess["data"]["lastname"])
         else:
             sess["data"][key] = speech
+            print(f"✅ {key} =", speech)
 
+        # Nächster Schritt
         sess["step"] += 1
+        step = sess["step"]
 
-        if sess["step"] < len(keys):
-            g = create_gather(sess["step"])
+        if step < len(keys):
+            g = create_gather(step)
             resp.append(g)
             return str(resp)
 
+        # Alles gesammelt → speichern & Goodbye
         save_row(sess["data"])
-        resp.play(url_for("static_files", filename="de_farewell.mp3", _external=True))
+        resp.play(static_url("de_farewell.mp3"))
         SESSIONS.pop(call_sid, None)
         return str(resp)
 
     except Exception as e:
+        print("❌ twilio_ai error:", e)
         resp.say("Leider ist ein Fehler aufgetreten.", language="de-DE")
         return str(resp)
 
 
-# Init
+# =========================
+# Init & Start
+# =========================
 init_sheets()
 os.makedirs("static", exist_ok=True)
+print("✅ SMA Voice – Arztpraxis gestartet mit BASE_URL:", BASE_URL)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
+
 
 
 
