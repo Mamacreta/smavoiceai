@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import re
 
 from flask import Flask, request, send_from_directory, url_for
 from twilio.twiml.voice_response import VoiceResponse, Gather
@@ -105,7 +106,7 @@ def save_row(data: dict):
 
 
 # =========================
-# Fragen
+# Helper – Fragen, Cleaning
 # =========================
 def next_question_text(step: int) -> str:
     texts = [
@@ -115,20 +116,20 @@ def next_question_text(step: int) -> str:
         "Worum geht es bei Ihrem Anliegen? Zum Beispiel Kontrolle, akute Beschwerden, Rezept oder etwas anderes.",
         "Für welches Datum wünschen Sie einen Termin? Sie können auch sagen: so bald wie möglich.",
         "Zu welcher Uhrzeit passt es Ihnen am besten? Morgens, nachmittags oder eine genaue Uhrzeit.",
-        "Unter welcher Telefonnummer können wir Sie zurückrufen? Bitte sprechen Sie die Nummer deutlich aus.",
+        "Bitte geben Sie jetzt Ihre Telefonnummer über die Telefontastatur ein und drücken Sie zum Schluss die Raute-Taste.",
     ]
     return texts[step]
 
 
 def question_audio_filename(step: int) -> str:
     files = [
-        "de_q0_status.mp3",
-        "de_q1_lastname.mp3",
-        "de_q2_dob.mp3",
-        "de_q3_reason.mp3",
-        "de_q4_date.mp3",
-        "de_q5_uhrzeit.mp3",
-        "de_q6_phone.mp3",
+        "de_q0_status.mp3",      # 0 – Status
+        "de_q1_lastname.mp3",    # 1 – Nachname
+        "de_q2_dob.mp3",         # 2 – Geburtsdatum
+        "de_q3_reason.mp3",      # 3 – Anliegen
+        "de_q4_date.mp3",        # 4 – Wunschdatum
+        "de_q5_uhrzeit.mp3",     # 5 – Wunschzeit
+        "de_q6_phone.mp3",       # 6 – Telefon (DTMF)
     ]
     return files[step]
 
@@ -140,6 +141,50 @@ def play_or_say_question(gather: Gather, step: int):
         gather.play(url_for("static_files", filename=filename, _external=True))
     else:
         gather.say(next_question_text(step), language="de-DE")
+
+
+def clean_phone(raw: str) -> str:
+    """Nur Ziffern behalten, alles andere weg."""
+    return re.sub(r"\D", "", raw or "")
+
+
+def clean_name(raw: str) -> str:
+    """Trimm einfache Satzzeichen am Ende weg."""
+    if not raw:
+        return ""
+    return raw.strip().strip(" .,:;!")
+
+
+def create_gather_for_step(step: int):
+    """
+    Für alle Schritte außer Telefon: Speech.
+    Für Telefon (step == 6): DTMF.
+    """
+    # phone index = 6 (0-based)
+    is_phone_step = (step == 6)
+
+    if is_phone_step:
+        g = Gather(
+            input="dtmf",
+            timeout=10,
+            num_digits=15,
+            finishOnKey="#",
+            action=url_for("twilio_ai", _external=True),
+            method="POST",
+        )
+    else:
+        g = Gather(
+            input="speech",
+            timeout=10,
+            speech_timeout="auto",
+            action=url_for("twilio_ai", _external=True),
+            method="POST",
+            language="de-DE",
+        )
+
+    g.pause(length=1)
+    play_or_say_question(g, step)
+    return g
 
 
 # =========================
@@ -167,11 +212,13 @@ def twilio_ai():
         call_sid = data.get("CallSid", "NA")
         raw_speech = data.get("SpeechResult") or ""
         speech = raw_speech.strip()
+        digits = (data.get("Digits") or "").strip()
 
         print("---- /twilio-ai ----")
         print("Method:", request.method)
         print("CallSid:", call_sid)
         print("SpeechResult (raw):", raw_speech)
+        print("Digits:", digits)
 
         sess = SESSIONS.get(call_sid)
         if not sess:
@@ -191,7 +238,7 @@ def twilio_ai():
             }
             SESSIONS[call_sid] = sess
 
-        # 1) Start: Begrüßung
+        # 1) Start: Begrüßung + erste Frage
         if not sess["started"]:
             sess["started"] = True
 
@@ -217,85 +264,73 @@ def twilio_ai():
         # 2) weitere Schritte
         keys = ["status", "lastname", "dob", "reason", "date", "time", "phone"]
         step = sess["step"]
+        is_phone_step = (step == 6)
 
-        # Wenn nichts verstanden
-        if not speech and step < len(keys):
-            g = Gather(
-                input="speech",
-                timeout=10,
-                speech_timeout="auto",
-                action=url_for("twilio_ai", _external=True),
-                method="POST",
-                language="de-DE",
-            )
-            g.pause(length=1)
-            play_or_say_question(g, step)
+        # Eingabe leer?
+        nothing_said = (not speech and not digits)
+
+        if nothing_said and step < len(keys):
+            g = create_gather_for_step(step)
             resp.append(g)
             return str(resp)
 
         # Antwort vorhanden
-        if step < len(keys) and speech:
+        if step < len(keys):
             key = keys[step]
 
-            # SPEZIALFALL NACHNAME
+            # ===== Nachname-Spezialfall =====
             if key == "lastname":
                 text_lower = speech.lower()
 
-                # Dein exakter Trigger
+                # Patient sagt explizit: "Name falsch"
                 if "name falsch" in text_lower:
                     sess["data"]["name_note"] = (
                         "Patient meldet: Nachname wurde falsch erkannt – bitte im Rückruf klären."
                     )
                     print("⚠️ Patient sagt 'Name falsch'. Rückruf-Flag gesetzt.")
 
-                    sess["data"]["lastname"] = speech  # optional speichern
+                    # optional: trotzdem irgendeinen Text speichern
+                    sess["data"]["lastname"] = clean_name(speech)
 
                     sess["step"] += 1
                     next_step = sess["step"]
 
-                    g = Gather(
-                        input="speech",
-                        timeout=10,
-                        speech_timeout="auto",
-                        action=url_for("twilio_ai", _external=True),
-                        method="POST",
-                        language="de-DE",
-                    )
-                    g.pause(length=1)
-
+                    g = create_gather_for_step(next_step)
+                    # zusätzlich kurzer Hinweis vor der nächsten Frage
                     g.say(
                         "Alles klar. Ich notiere, dass wir Ihren Namen beim Rückruf klären. Fahren wir fort.",
                         language="de-DE",
                     )
 
-                    play_or_say_question(g, next_step)
-
                     resp.append(g)
                     return str(resp)
 
-            # normal speichern
-            sess["data"][key] = speech
-            print(f"✅ {key} = {speech}")
+                # normaler Nachname-Fall
+                sess["data"]["lastname"] = clean_name(speech)
+                print(f"✅ lastname = {sess['data']['lastname']}")
+
+            # ===== Telefon-Spezialfall (DTMF) =====
+            elif key == "phone":
+                phone_raw = digits or speech
+                phone_clean = clean_phone(phone_raw)
+                sess["data"]["phone"] = phone_clean
+                print(f"✅ phone (clean) = {phone_clean}")
+
+            # ===== alle anderen Felder =====
+            else:
+                sess["data"][key] = speech
+                print(f"✅ {key} = {speech}")
 
         # nächste Frage
         sess["step"] += 1
         step = sess["step"]
 
         if step < len(keys):
-            g = Gather(
-                input="speech",
-                timeout=10,
-                speech_timeout="auto",
-                action=url_for("twilio_ai", _external=True),
-                method="POST",
-                language="de-DE",
-            )
-            g.pause(length=1)
-            play_or_say_question(g, step)
+            g = create_gather_for_step(step)
             resp.append(g)
             return str(resp)
 
-        # 3) speichern & Verabschiedung
+        # 3) fertig → speichern & Verabschiedung
         save_row(sess["data"])
 
         farewell_url = url_for("static_files", filename="de_farewell.mp3", _external=True)
@@ -323,6 +358,7 @@ print("✅ SMA Voice – Sheets init beim Import ausgeführt.")
 if __name__ == "__main__":
     print(f"📞 SMA Voice – Arztpraxis läuft lokal auf Port {PORT}")
     app.run(host="0.0.0.0", port=PORT)
+
 
 
 
