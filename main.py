@@ -17,7 +17,6 @@ PORT = int(os.getenv("PORT", "10000"))
 SHEET_ID = os.getenv("SHEET_ID", "")
 CREDS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
 
-# Deine öffentliche Render-URL
 BASE_URL = os.getenv("BASE_URL", "https://smavoiceai.onrender.com").rstrip("/")
 
 SESSIONS = {}
@@ -26,12 +25,10 @@ ws = None
 
 
 def static_url(filename: str) -> str:
-    """Absolute URL für MP3s."""
     return f"{BASE_URL}/static/{filename}"
 
 
 def action_url() -> str:
-    """Absolute URL für /twilio-ai."""
     return f"{BASE_URL}/twilio-ai"
 
 
@@ -72,7 +69,7 @@ def init_sheets():
                 [
                     "Timestamp",
                     "Status",
-                    "Nachname",      # bleibt zur Kompatibilität, bleibt aber leer
+                    "Nachname",      # bleibt leer
                     "Geburtsdatum",
                     "Anliegen",
                     "Wunschdatum",
@@ -100,7 +97,7 @@ def save_row(data):
             [
                 ts,
                 data.get("status", ""),
-                data.get("lastname", ""),  # bleibt leer
+                "",  # Nachname leer
                 data.get("dob", ""),
                 data.get("reason", ""),
                 data.get("date", ""),
@@ -148,33 +145,17 @@ def format_dob_from_digits(digits: str) -> str:
 
 def next_question_text(step: int) -> str:
     texts = [
-        # 0 – Status
-        "Sind Sie bereits Patientin oder Patient bei uns? Bitte sagen Sie: ja, nein oder unsicher.",
-        # 1 – DOB (DTMF)
+        "Sind Sie bereits Patientin oder Patient bei uns? Drücken Sie 1 für ja, 2 für nein, 3 für unsicher.",
         "Bitte geben Sie jetzt Ihr Geburtsdatum als sechsstellige Zahl ein, zum Beispiel 010807 für den ersten August zweitausendsieben.",
-        # 2 – Anliegen
-        "Worum geht es bei Ihrem Anliegen? Bitte sagen Sie: Kontrolle, Rezept, akute Beschwerden, administrativ oder anderes Anliegen.",
-        # 3 – Zeitraum
-        "Wann wünschen Sie ungefähr den Termin? Sagen Sie: heute, diese Woche, nächste Woche oder egal.",
-        # 4 – Tageszeit
-        "Zu welcher Tageszeit passt es Ihnen am besten? Sagen Sie: morgens, nachmittags oder egal.",
-        # 5 – Telefon (DTMF)
+        "Worum geht es bei Ihrem Anliegen? Drücken Sie 1 für Kontrolle, 2 für Rezept, 3 für akute Beschwerden, 4 für administrative Anliegen oder 5 für anderes.",
+        "Wann wünschen Sie ungefähr den Termin? Drücken Sie 1 für heute, 2 für diese Woche, 3 für nächste Woche oder 4 für egal.",
+        "Zu welcher Tageszeit passt es Ihnen am besten? Drücken Sie 1 für morgens, 2 für nachmittags oder 3 für egal.",
         "Bitte geben Sie jetzt Ihre Telefonnummer mit zehn Ziffern über die Telefontastatur ein.",
     ]
     return texts[step]
 
 
 def question_audio_filename(step: int) -> str:
-    """
-    Wir überspringen de_q1_lastname.mp3 komplett.
-    Mapping:
-      0 -> de_q0_status.mp3
-      1 -> de_q2_dob.mp3
-      2 -> de_q3_reason.mp3
-      3 -> de_q4_date.mp3
-      4 -> de_q5_uhrzeit.mp3
-      5 -> de_q6_phone.mp3
-    """
     files = [
         "de_q0_status.mp3",   # 0 Status
         "de_q2_dob.mp3",      # 1 DOB (DTMF)
@@ -197,37 +178,40 @@ def play_question(g: Gather, step: int):
 
 def create_gather(step: int) -> Gather:
     """
-    step 0,2,3,4 = Speech
-    step 1 (dob) = DTMF (bis 8 Ziffern)
-    step 5 (phone) = DTMF (10 Ziffern)
+    ALLES DTMF:
+      step 0  = Status (1 Ziffer)
+      step 1  = DOB (bis 8 Ziffern)
+      step 2  = Reason (1 Ziffer)
+      step 3  = Date range (1 Ziffer)
+      step 4  = Time of day (1 Ziffer)
+      step 5  = Phone (10 Ziffern)
     """
-    is_dob = (step == 1)
-    is_phone = (step == 5)
-
-    if is_dob:
+    if step == 1:
+        # DOB
         g = Gather(
             input="dtmf",
             timeout=15,
-            num_digits=8,   # erlaubt 6 oder 8 Ziffern
+            num_digits=8,   # Patient kann 6 oder 8 Ziffern tippen
             action=action_url(),
             method="POST",
         )
-    elif is_phone:
+    elif step == 5:
+        # Phone
         g = Gather(
             input="dtmf",
             timeout=15,
-            num_digits=10,  # z.B. 0761234567
+            num_digits=10,
             action=action_url(),
             method="POST",
         )
     else:
+        # Status, reason, date, time -> 1 Ziffer
         g = Gather(
-            input="speech",
+            input="dtmf",
             timeout=10,
-            speech_timeout="auto",
+            num_digits=1,
             action=action_url(),
             method="POST",
-            language="de-DE",
         )
 
     g.pause(length=1)
@@ -258,12 +242,10 @@ def twilio_ai():
         data = request.form if request.method == "POST" else request.args
 
         call_sid = data.get("CallSid", "NA")
-        speech = (data.get("SpeechResult") or "").strip()
         digits = (data.get("Digits") or "").strip()
 
         print("---- /twilio-ai ----")
         print("CallSid:", call_sid)
-        print("SpeechResult:", speech)
         print("Digits:", digits)
 
         sess = SESSIONS.get(call_sid)
@@ -289,12 +271,11 @@ def twilio_ai():
             sess["started"] = True
 
             g = Gather(
-                input="speech",
+                input="dtmf",
                 timeout=10,
-                speech_timeout="auto",
+                num_digits=1,
                 action=action_url(),
                 method="POST",
-                language="de-DE",
             )
             g.pause(length=1)
             g.play(static_url("de_greet.mp3"))
@@ -303,18 +284,17 @@ def twilio_ai():
             resp.append(g)
             return str(resp)
 
-        # Reihenfolge der Felder (ohne Nachname)
         keys = ["status", "dob", "reason", "date", "time", "phone"]
         step = sess["step"]
 
-        # Wenn gar nichts gesagt/getippt wurde → gleiche Frage wiederholen
-        if not speech and not digits and step < len(keys):
+        # Wenn keine Eingabe → Frage wiederholen
+        if not digits and step < len(keys):
             print("⚠️ Keine Eingabe – Frage wird wiederholt, step =", step)
             g = create_gather(step)
             resp.append(g)
             return str(resp)
 
-        # Wenn wir schon alles haben → speichern & Goodbye
+        # Wenn alles schon vorhanden → speichern & Goodbye
         if step >= len(keys):
             save_row(sess["data"])
             resp.play(static_url("de_farewell.mp3"))
@@ -323,20 +303,87 @@ def twilio_ai():
 
         key = keys[step]
 
+        # Mapping-Tabellen für Menüs
+        status_map = {
+            "1": "bestehend",
+            "2": "neu",
+            "3": "unsicher",
+        }
+        reason_map = {
+            "1": "Kontrolle",
+            "2": "Rezept",
+            "3": "akute Beschwerden",
+            "4": "administrativ",
+            "5": "anderes",
+        }
+        date_map = {
+            "1": "heute",
+            "2": "diese Woche",
+            "3": "nächste Woche",
+            "4": "egal",
+        }
+        time_map = {
+            "1": "morgens",
+            "2": "nachmittags",
+            "3": "egal",
+        }
+
         # Antwort speichern je nach Feld
-        if key == "phone":
-            phone_clean = clean_phone(digits)
-            sess["data"]["phone"] = phone_clean
-            print("✅ phone =", phone_clean)
+        if key == "status":
+            value = status_map.get(digits)
+            if not value:
+                # Ungültige Eingabe → Frage wiederholen
+                print("⚠️ Ungültiger Status, digits =", digits)
+                g = create_gather(step)
+                resp.append(g)
+                return str(resp)
+            sess["data"]["status"] = value
+            print("✅ status =", value)
 
         elif key == "dob":
             dob_formatted = format_dob_from_digits(digits)
             sess["data"]["dob"] = dob_formatted
             print("✅ dob =", dob_formatted)
 
-        else:
-            sess["data"][key] = speech
-            print(f"✅ {key} =", speech)
+        elif key == "reason":
+            value = reason_map.get(digits)
+            if not value:
+                print("⚠️ Ungültiges Anliegen, digits =", digits)
+                g = create_gather(step)
+                resp.append(g)
+                return str(resp)
+            sess["data"]["reason"] = value
+            print("✅ reason =", value)
+
+        elif key == "date":
+            value = date_map.get(digits)
+            if not value:
+                print("⚠️ Ungültiger Zeitraum, digits =", digits)
+                g = create_gather(step)
+                resp.append(g)
+                return str(resp)
+            sess["data"]["date"] = value
+            print("✅ date =", value)
+
+        elif key == "time":
+            value = time_map.get(digits)
+            if not value:
+                print("⚠️ Ungültige Tageszeit, digits =", digits)
+                g = create_gather(step)
+                resp.append(g)
+                return str(resp)
+            sess["data"]["time"] = value
+            print("✅ time =", value)
+
+        elif key == "phone":
+            phone_clean = clean_phone(digits)
+            if len(phone_clean) < 6:
+                print("⚠️ Telefonnummer zu kurz, digits =", digits)
+                g = create_gather(step)
+                resp.append(g)
+                return str(resp)
+            sess["data"]["phone"] = phone_clean
+            print("✅ phone =", phone_clean)
 
         # Nächster Schritt
         sess["step"] += 1
@@ -364,7 +411,7 @@ def twilio_ai():
 # =========================
 init_sheets()
 os.makedirs("static", exist_ok=True)
-print("✅ SMA Voice – Arztpraxis (ohne Nachname) gestartet mit BASE_URL:", BASE_URL)
+print("✅ SMA Voice – Arztpraxis (nur DTMF) gestartet mit BASE_URL:", BASE_URL)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
