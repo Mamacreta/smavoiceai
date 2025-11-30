@@ -144,13 +144,14 @@ def format_dob_from_digits(digits: str) -> str:
 
 
 def next_question_text(step: int) -> str:
+    # Fallback-Texte, falls MP3 fehlt – angepasst an deinen neuen Flow
     texts = [
-        "Sind Sie bereits Patientin oder Patient bei uns? Drücken Sie 1 für ja, 2 für nein, 3 für unsicher.",
-        "Bitte geben Sie jetzt Ihr Geburtsdatum als sechsstellige Zahl ein, zum Beispiel 010807 für den ersten August zweitausendsieben.",
-        "Worum geht es bei Ihrem Anliegen? Drücken Sie 1 für Kontrolle, 2 für Rezept, 3 für akute Beschwerden, 4 für administrative Anliegen oder 5 für anderes.",
-        "Wann wünschen Sie ungefähr den Termin? Drücken Sie 1 für heute, 2 für diese Woche, 3 für nächste Woche oder 4 für egal.",
-        "Zu welcher Tageszeit passt es Ihnen am besten? Drücken Sie 1 für morgens, 2 für nachmittags oder 3 für egal.",
-        "Bitte geben Sie jetzt Ihre Telefonnummer mit zehn Ziffern über die Telefontastatur ein.",
+        "Sind Sie bereits Patientin oder Patient bei uns? Druecken Sie 1 fuer ja, 2 fuer nein, 3 fuer unsicher.",
+        "Bitte geben Sie jetzt Ihr Geburtsdatum als achtstellige Zahl ein, zum Beispiel 01082007 fuer den ersten August zweitausendsieben.",
+        "Worum geht es bei Ihrem Anliegen? Druecken Sie 1 fuer Termin, 2 fuer Wiederholungsrezept, 3 fuer Krankmeldung oder 4 fuer allgemeine Frage.",
+        "Wann moechten Sie ungefaehr den Termin? Druecken Sie 1 fuer heute, 2 fuer diese Woche, 3 fuer naechste Woche oder 4 fuer egal.",
+        "Welche Tageszeit bevorzugen Sie? Druecken Sie 1 fuer Vormittag, 2 fuer Nachmittag, 3 fuer Abend oder 4 fuer egal.",
+        "Bitte geben Sie jetzt Ihre Telefonnummer mit zehn Ziffern ueber die Telefontastatur ein.",
     ]
     return texts[step]
 
@@ -180,18 +181,18 @@ def create_gather(step: int) -> Gather:
     """
     ALLES DTMF:
       step 0  = Status (1 Ziffer)
-      step 1  = DOB (bis 8 Ziffern)
+      step 1  = DOB (8 Ziffern, wir erlauben 6- oder 8-stellig, aber schicken nach 8 direkt)
       step 2  = Reason (1 Ziffer)
       step 3  = Date range (1 Ziffer)
       step 4  = Time of day (1 Ziffer)
       step 5  = Phone (10 Ziffern)
     """
     if step == 1:
-        # DOB
+        # DOB – schneller nach Eingabe, nicht 15 Sekunden warten
         g = Gather(
             input="dtmf",
-            timeout=15,
-            num_digits=8,   # Patient kann 6 oder 8 Ziffern tippen
+            timeout=5,     # kürzer, damit es nicht ewig wartet
+            num_digits=8,  # sobald 8 Ziffern gedrückt sind, geht es direkt weiter
             action=action_url(),
             method="POST",
         )
@@ -278,7 +279,8 @@ def twilio_ai():
                 method="POST",
             )
             g.pause(length=1)
-            g.play(static_url("de_greet.mp3"))
+            # WICHTIG: deine Datei heisst de_greet.mp3.mp3
+            g.play(static_url("de_greet.mp3.mp3"))
             g.play(static_url("de_q0_status.mp3"))
 
             resp.append(g)
@@ -303,29 +305,29 @@ def twilio_ai():
 
         key = keys[step]
 
-        # Mapping-Tabellen für Menüs
+        # Mapping-Tabellen für Menüs – ANGEPASST an dein neues Skript
         status_map = {
             "1": "bestehend",
             "2": "neu",
             "3": "unsicher",
         }
         reason_map = {
-            "1": "Kontrolle",
-            "2": "Rezept",
-            "3": "akute Beschwerden",
-            "4": "administrativ",
-            "5": "anderes",
+            "1": "Termin",
+            "2": "Wiederholungsrezept",
+            "3": "Krankmeldung",
+            "4": "allgemeine Frage",
         }
         date_map = {
             "1": "heute",
             "2": "diese Woche",
-            "3": "nächste Woche",
+            "3": "naechste Woche",
             "4": "egal",
         }
         time_map = {
-            "1": "morgens",
-            "2": "nachmittags",
-            "3": "egal",
+            "1": "Vormittag",
+            "2": "Nachmittag",
+            "3": "Abend",
+            "4": "egal",
         }
 
         # Antwort speichern je nach Feld
@@ -415,6 +417,7 @@ print("✅ SMA Voice – Arztpraxis (nur DTMF) gestartet mit BASE_URL:", BASE_UR
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
+
 
 
 
