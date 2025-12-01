@@ -144,7 +144,7 @@ def format_dob_from_digits(digits: str) -> str:
 
 
 def next_question_text(step: int) -> str:
-    # Fallback-Texte, falls MP3 fehlt – angepasst an deinen neuen Flow
+    # Fallback-Texte, falls MP3 fehlt – angepasst an deinen Flow
     texts = [
         "Sind Sie bereits Patientin oder Patient bei uns? Druecken Sie 1 fuer ja, 2 fuer nein, 3 fuer unsicher.",
         "Bitte geben Sie jetzt Ihr Geburtsdatum als achtstellige Zahl ein, zum Beispiel 01082007 fuer den ersten August zweitausendsieben.",
@@ -279,8 +279,8 @@ def twilio_ai():
                 method="POST",
             )
             g.pause(length=1)
-            # WICHTIG: deine Datei heisst de_greet.mp3.mp3
-            g.play(static_url("de_greet.mp3.mp3"))
+            # Begrüssung – deine Datei heisst de_greet.mp3
+            g.play(static_url("de_greet.mp3"))
             g.play(static_url("de_q0_status.mp3"))
 
             resp.append(g)
@@ -305,7 +305,7 @@ def twilio_ai():
 
         key = keys[step]
 
-        # Mapping-Tabellen für Menüs – ANGEPASST an dein neues Skript
+        # Mapping-Tabellen für Menüs – angepasst an dein Skript
         status_map = {
             "1": "bestehend",
             "2": "neu",
@@ -334,7 +334,6 @@ def twilio_ai():
         if key == "status":
             value = status_map.get(digits)
             if not value:
-                # Ungültige Eingabe → Frage wiederholen
                 print("⚠️ Ungültiger Status, digits =", digits)
                 g = create_gather(step)
                 resp.append(g)
